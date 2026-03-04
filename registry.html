@@ -265,6 +265,17 @@ function initItems() {
   // Load image overrides
   const imgSaved = localStorage.getItem("op-reg-img-overrides");
   if (imgSaved) { try { const io = JSON.parse(imgSaved); Object.assign(IMAGES, io); } catch(e){} }
+  // Load link overrides
+  const linkSaved = localStorage.getItem("op-reg-link-overrides");
+  if (linkSaved) {
+    try {
+      const lo = JSON.parse(linkSaved);
+      Object.keys(lo).forEach(id => {
+        const idx = ITEMS.findIndex(i => i.id === id);
+        if (idx >= 0) ITEMS[idx].links = lo[id];
+      });
+    } catch(e){}
+  }
   if (CUSTOM_ORDER.length > 0) {
     ITEMS = CUSTOM_ORDER.map(id => DEFAULT_ITEMS.find(i=>i.id===id)).filter(Boolean);
     const remaining = DEFAULT_ITEMS.filter(i => !CUSTOM_ORDER.includes(i.id));
@@ -400,6 +411,7 @@ function moveItem(itemId, direction) {
 function openEdit(itemId) {
   const item = ITEMS.find(i => i.id === itemId);
   if (!item) return;
+  window._editLinks = JSON.parse(JSON.stringify(item.links || []));
   const modal = document.getElementById("editModal");
   modal.innerHTML = `
     <h3>Edit: ${item.name}</h3>
@@ -407,8 +419,25 @@ function openEdit(itemId) {
     <div class="edit-field"><label>Description</label><textarea id="ed-desc">${item.desc}</textarea></div>
     <div class="edit-field"><label>Options / We'd Love</label><input id="ed-opts" value="${item.opts.replace(/"/g,'&quot;')}"></div>
     <div class="edit-field"><label>Price</label><input id="ed-price" value="${item.price.replace(/"/g,'&quot;')}"></div>
-    <div class="edit-field"><label>Photo (paste image URL or base64 data:image/...)</label><input id="ed-img" value="" placeholder="Leave blank to keep current photo"><p style="font-size:10px;color:#aaa;margin-top:4px">Tip: Upload an image to imgur.com or postimages.org and paste the direct image URL</p></div>
+    <div class="edit-field">
+      <label>Photo</label>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+        <img id="ed-img-preview" src="${IMAGES[item.id]}" style="width:60px;height:60px;object-fit:contain;border:1px solid #ddd;border-radius:6px;background:#f8f6f2">
+        <div style="flex:1">
+          <label style="display:inline-block;padding:8px 16px;background:#5B6E2E;color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">
+            Choose Image…
+            <input type="file" id="ed-img-file" accept="image/*" style="display:none" onchange="handleImgUpload(this)">
+          </label>
+          <span id="ed-img-status" style="font-size:11px;color:#999;margin-left:8px">No new file selected</span>
+        </div>
+      </div>
+    </div>
     <div class="edit-field"><label>Category</label><input id="ed-cat" value="${item.cat}"></div>
+    <div class="edit-field">
+      <label>Product Links</label>
+      <div id="ed-links-list" style="margin-top:6px">${renderEditLinks()}</div>
+      <button onclick="addEditLink()" style="margin-top:6px;font-size:12px;padding:6px 12px;background:#F8F6F0;border:1px dashed #5B6E2E;border-radius:6px;color:#5B6E2E;cursor:pointer;font-weight:500">+ Add Link</button>
+    </div>
     <div class="edit-btns">
       <button class="edit-save" onclick="saveEdit('${itemId}')">Save</button>
       <button class="edit-cancel" onclick="closeEdit()">Cancel</button>
@@ -417,25 +446,100 @@ function openEdit(itemId) {
   document.getElementById("editOverlay").classList.add("open");
 }
 
+window._pendingImg = null;
+
+function handleImgUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    // Resize to max 300px wide for storage efficiency
+    const img = new Image();
+    img.onload = function() {
+      const maxW = 300;
+      let w = img.width, h = img.height;
+      if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+      window._pendingImg = dataUrl;
+      const preview = document.getElementById("ed-img-preview");
+      if (preview) preview.src = dataUrl;
+      const status = document.getElementById("ed-img-status");
+      if (status) { status.textContent = file.name; status.style.color = "#5B6E2E"; }
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function renderEditLinks() {
+  return window._editLinks.map((lk, i) => `
+    <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+      <input class="ed-link-label" data-idx="${i}" value="${(lk.l||'').replace(/"/g,'&quot;')}" placeholder="Label (e.g. View on Amazon)" style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-family:Outfit,sans-serif">
+      <input class="ed-link-url" data-idx="${i}" value="${(lk.u||'').replace(/"/g,'&quot;')}" placeholder="https://..." style="flex:2;font-size:12px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-family:Outfit,sans-serif">
+      <button onclick="removeEditLink(${i})" style="background:none;border:none;color:#c44;cursor:pointer;font-size:16px;padding:2px 6px" title="Remove link">✕</button>
+    </div>
+  `).join("");
+}
+
+function addEditLink() {
+  window._editLinks.push({l:"", u:""});
+  syncEditLinksFromDOM();
+  document.getElementById("ed-links-list").innerHTML = renderEditLinks();
+}
+
+function removeEditLink(idx) {
+  syncEditLinksFromDOM();
+  window._editLinks.splice(idx, 1);
+  document.getElementById("ed-links-list").innerHTML = renderEditLinks();
+}
+
+function syncEditLinksFromDOM() {
+  document.querySelectorAll(".ed-link-label").forEach(el => {
+    const i = parseInt(el.dataset.idx);
+    if (window._editLinks[i]) window._editLinks[i].l = el.value;
+  });
+  document.querySelectorAll(".ed-link-url").forEach(el => {
+    const i = parseInt(el.dataset.idx);
+    if (window._editLinks[i]) window._editLinks[i].u = el.value;
+  });
+}
+
 function closeEdit() {
   document.getElementById("editOverlay").classList.remove("open");
 }
 
 function saveEdit(itemId) {
+  // Sync links from DOM before saving
+  syncEditLinksFromDOM();
+  const cleanLinks = window._editLinks.filter(lk => lk.u && lk.u.trim());
+
   const override = {
     name: document.getElementById("ed-name").value,
     desc: document.getElementById("ed-desc").value,
     opts: document.getElementById("ed-opts").value,
     price: document.getElementById("ed-price").value,
     cat: document.getElementById("ed-cat").value,
+    links: cleanLinks,
   };
-  const newImg = document.getElementById("ed-img").value.trim();
-  if (newImg) {
+
+  // Handle photo upload
+  if (window._pendingImg) {
     const imgOverrides = JSON.parse(localStorage.getItem("op-reg-img-overrides") || "{}");
-    imgOverrides[itemId] = newImg;
+    imgOverrides[itemId] = window._pendingImg;
     localStorage.setItem("op-reg-img-overrides", JSON.stringify(imgOverrides));
-    IMAGES[itemId] = newImg;
+    IMAGES[itemId] = window._pendingImg;
+    window._pendingImg = null;
   }
+
+  // Save link overrides
+  const linkOverrides = JSON.parse(localStorage.getItem("op-reg-link-overrides") || "{}");
+  linkOverrides[itemId] = cleanLinks;
+  localStorage.setItem("op-reg-link-overrides", JSON.stringify(linkOverrides));
+
   editOverrides[itemId] = override;
   localStorage.setItem("op-reg-overrides", JSON.stringify(editOverrides));
   const idx = ITEMS.findIndex(i => i.id === itemId);
@@ -467,6 +571,7 @@ function resetOrder() {
   localStorage.removeItem("op-reg-order");
   localStorage.removeItem("op-reg-overrides");
   localStorage.removeItem("op-reg-img-overrides");
+  localStorage.removeItem("op-reg-link-overrides");
   editOverrides = {};
   ITEMS = [...DEFAULT_ITEMS];
   renderAdminList();
