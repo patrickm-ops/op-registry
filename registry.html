@@ -184,6 +184,7 @@ button{cursor:pointer;font-family:'Outfit',sans-serif}
 
   <div class="admin-section">
     <h3>Reorder & Edit Items</h3>
+    <button onclick="openAddItem()" style="width:100%;padding:10px;margin-bottom:12px;background:#F8F6F0;border:2px dashed #5B6E2E;border-radius:8px;color:#5B6E2E;font-size:13px;font-weight:600;cursor:pointer;font-family:Outfit,sans-serif">+ Add New Item</button>
     <div class="admin-filter-bar" id="adminFilterBar"></div>
     <div id="adminItemList"></div>
   </div>
@@ -338,6 +339,30 @@ function initItems() {
     } else {
       ITEMS = [...DEFAULT_ITEMS];
     }
+  }
+  // Remove deleted default items
+  const deletedItems = localStorage.getItem("op-reg-deleted-items");
+  if (deletedItems) {
+    try {
+      const deleted = JSON.parse(deletedItems);
+      ITEMS = ITEMS.filter(i => !deleted.includes(i.id));
+    } catch(e){}
+  }
+  // Load user-added items
+  const addedItems = localStorage.getItem("op-reg-added-items");
+  if (addedItems) {
+    try {
+      const added = JSON.parse(addedItems);
+      added.forEach(item => {
+        if (!ITEMS.find(i => i.id === item.id)) {
+          ITEMS.push(item);
+          if (item.cat && !CATS_ALL.includes(item.cat)) {
+            CATS_ALL.push(item.cat);
+            CATS_ALL.sort();
+          }
+        }
+      });
+    } catch(e){}
   }
   // Apply overrides
   ITEMS = ITEMS.map(item => {
@@ -512,7 +537,10 @@ function handleImgUpload(input) {
       const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
       window._pendingImg = dataUrl;
       const preview = document.getElementById("ed-img-preview");
-      if (preview) preview.src = dataUrl;
+      if (preview) {
+        if (preview.tagName === "IMG") { preview.src = dataUrl; }
+        else { preview.innerHTML = `<img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain;border-radius:6px">`; }
+      }
       const status = document.getElementById("ed-img-status");
       if (status) { status.textContent = file.name; status.style.color = "#5B6E2E"; }
     };
@@ -596,6 +624,148 @@ function saveEdit(itemId) {
   showToast("Item updated!");
 }
 
+function openAddItem() {
+  window._editLinks = [{l:"", u:""}];
+  window._pendingImg = null;
+  const cats = [...new Set(ITEMS.map(i=>i.cat))];
+  const modal = document.getElementById("editModal");
+  modal.innerHTML = `
+    <h3>Add New Item</h3>
+    <div class="edit-field"><label>Name *</label><input id="ed-name" value="" placeholder="e.g. Stand Mixer"></div>
+    <div class="edit-field"><label>Description</label><textarea id="ed-desc" placeholder="Short description of the item"></textarea></div>
+    <div class="edit-field"><label>Options / We'd Love</label><input id="ed-opts" value="" placeholder="e.g. White, 5-quart"></div>
+    <div class="edit-field"><label>Price</label><input id="ed-price" value="" placeholder="e.g. $150–$200"></div>
+    <div class="edit-field">
+      <label>Photo</label>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+        <div id="ed-img-preview" style="width:60px;height:60px;border:1px dashed #ddd;border-radius:6px;background:#f8f6f2;display:flex;align-items:center;justify-content:center;font-size:20px;color:#ccc">📷</div>
+        <div style="flex:1">
+          <label style="display:inline-block;padding:8px 16px;background:#5B6E2E;color:#fff;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500">
+            Choose Image…
+            <input type="file" id="ed-img-file" accept="image/*" style="display:none" onchange="handleImgUpload(this)">
+          </label>
+          <span id="ed-img-status" style="font-size:11px;color:#999;margin-left:8px">No file selected</span>
+        </div>
+      </div>
+    </div>
+    <div class="edit-field">
+      <label>Category</label>
+      <input id="ed-cat" value="" placeholder="e.g. Kitchen" list="cat-suggestions">
+      <datalist id="cat-suggestions">${cats.map(c=>`<option value="${c}">`).join("")}</datalist>
+    </div>
+    <div class="edit-field">
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="ed-group"> Group Gift Idea (for expensive items)
+      </label>
+    </div>
+    <div class="edit-field">
+      <label>Product Links</label>
+      <div id="ed-links-list" style="margin-top:6px">${renderEditLinks()}</div>
+      <button onclick="addEditLink()" style="margin-top:6px;font-size:12px;padding:6px 12px;background:#F8F6F0;border:1px dashed #5B6E2E;border-radius:6px;color:#5B6E2E;cursor:pointer;font-weight:500">+ Add Link</button>
+    </div>
+    <div class="edit-btns">
+      <button class="edit-save" onclick="saveNewItem()">Add Item</button>
+      <button class="edit-cancel" onclick="closeEdit()">Cancel</button>
+    </div>
+  `;
+  document.getElementById("editOverlay").classList.add("open");
+}
+
+function saveNewItem() {
+  const name = document.getElementById("ed-name").value.trim();
+  if (!name) {
+    document.getElementById("ed-name").style.borderColor = "#c44";
+    document.getElementById("ed-name").focus();
+    return;
+  }
+  // Generate ID from name
+  const id = name.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/-+$/,"") + "-" + Date.now().toString(36);
+
+  syncEditLinksFromDOM();
+  const cleanLinks = window._editLinks.filter(lk => lk.u && lk.u.trim());
+
+  const newItem = {
+    id: id,
+    name: name,
+    cat: document.getElementById("ed-cat").value.trim() || "Other",
+    desc: document.getElementById("ed-desc").value.trim() || "",
+    opts: document.getElementById("ed-opts").value.trim() || "",
+    price: document.getElementById("ed-price").value.trim() || "",
+    group: document.getElementById("ed-group").checked,
+    links: cleanLinks
+  };
+
+  // Handle photo
+  if (window._pendingImg) {
+    IMAGES[id] = window._pendingImg;
+    const imgOverrides = JSON.parse(localStorage.getItem("op-reg-img-overrides") || "{}");
+    imgOverrides[id] = window._pendingImg;
+    localStorage.setItem("op-reg-img-overrides", JSON.stringify(imgOverrides));
+    window._pendingImg = null;
+  } else {
+    // Placeholder image
+    IMAGES[id] = "data:image/svg+xml;base64," + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200"><rect fill="#F8F6F2" width="200" height="200"/><text x="100" y="105" text-anchor="middle" fill="#C4956A" font-size="40">🎁</text></svg>');
+  }
+
+  // Save link overrides
+  if (cleanLinks.length) {
+    const linkOverrides = JSON.parse(localStorage.getItem("op-reg-link-overrides") || "{}");
+    linkOverrides[id] = cleanLinks;
+    localStorage.setItem("op-reg-link-overrides", JSON.stringify(linkOverrides));
+  }
+
+  // Add to items list
+  ITEMS.push(newItem);
+
+  // Persist new items to localStorage
+  const addedItems = JSON.parse(localStorage.getItem("op-reg-added-items") || "[]");
+  addedItems.push(newItem);
+  localStorage.setItem("op-reg-added-items", JSON.stringify(addedItems));
+
+  // Update categories
+  if (newItem.cat && !CATS_ALL.includes(newItem.cat)) {
+    CATS_ALL.push(newItem.cat);
+    CATS_ALL.sort();
+  }
+
+  closeEdit();
+  renderAdminList();
+  render();
+  showToast("\"" + name + "\" added to registry!");
+}
+
+function deleteItem(itemId) {
+  const item = ITEMS.find(i => i.id === itemId);
+  if (!item) return;
+  if (!confirm(`Delete "${item.name}" from the registry?`)) return;
+
+  // Remove from ITEMS array
+  ITEMS = ITEMS.filter(i => i.id !== itemId);
+
+  // Remove from added items if it was user-added
+  const addedItems = JSON.parse(localStorage.getItem("op-reg-added-items") || "[]");
+  const filtered = addedItems.filter(i => i.id !== itemId);
+  localStorage.setItem("op-reg-added-items", JSON.stringify(filtered));
+
+  // Track deleted default items
+  const isDefault = DEFAULT_ITEMS.find(i => i.id === itemId);
+  if (isDefault) {
+    const deleted = JSON.parse(localStorage.getItem("op-reg-deleted-items") || "[]");
+    if (!deleted.includes(itemId)) deleted.push(itemId);
+    localStorage.setItem("op-reg-deleted-items", JSON.stringify(deleted));
+  }
+
+  // Clean up related data
+  delete claims[itemId];
+  saveClaims();
+  delete editOverrides[itemId];
+  localStorage.setItem("op-reg-overrides", JSON.stringify(editOverrides));
+
+  renderAdminList();
+  render();
+  showToast(`"${item.name}" removed`);
+}
+
 function saveAdminChanges() {
   localStorage.setItem("op-reg-order", JSON.stringify(ITEMS.map(i=>i.id)));
   localStorage.setItem("op-reg-overrides", JSON.stringify(editOverrides));
@@ -613,12 +783,14 @@ function exportConfig() {
 }
 
 function resetOrder() {
-  if (!confirm("Reset item order to default?")) return;
+  if (!confirm("Reset ALL admin changes? This will remove added items and restore defaults.")) return;
   localStorage.removeItem("op-reg-order");
   localStorage.removeItem("op-reg-overrides");
   localStorage.removeItem("op-reg-img-overrides");
   localStorage.removeItem("op-reg-link-overrides");
   localStorage.removeItem("op-reg-site-text");
+  localStorage.removeItem("op-reg-added-items");
+  localStorage.removeItem("op-reg-deleted-items");
   editOverrides = {};
   siteText = {...SITE_TEXT_DEFAULTS};
   ITEMS = [...DEFAULT_ITEMS];
@@ -664,6 +836,7 @@ function renderAdminList() {
         <div class="admin-item-cat">${item.cat} · ${item.price}</div>
       </div>
       <button class="admin-edit-btn" onclick="openEdit('${item.id}')">Edit</button>
+      <button class="admin-edit-btn" style="color:#c44;border-color:#c44" onclick="deleteItem('${item.id}')" title="Delete item">✕</button>
       <div class="admin-arrows">
         <button ${idx===0?"disabled":""} onclick="moveItem('${item.id}',-1)">▲</button>
         <button ${idx===filtered.length-1?"disabled":""} onclick="moveItem('${item.id}',1)">▼</button>
