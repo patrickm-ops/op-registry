@@ -50,6 +50,8 @@ button{cursor:pointer;font-family:'Outfit',sans-serif}
 .card-img{max-width:100%;max-height:100%;object-fit:contain;padding:16px}
 .card-cat{font-size:9px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:#7A8B47;padding:14px 22px 0}
 .card-name{font-family:'Cormorant Garamond',Georgia,serif;font-size:21px;font-weight:500;color:#2C3315;margin:4px 22px 6px;line-height:1.25}
+.card-name a:hover{text-decoration:underline}
+.card-img-wrap:hover{opacity:0.85;transition:opacity 0.15s}
 .card-desc{font-size:13px;line-height:1.65;color:#777;margin:0 22px 12px;font-weight:300;flex:1}
 .meta{display:flex;flex-direction:column;gap:6px;margin:0 22px 14px;padding:12px 0;border-top:1px solid #F0ECE4}
 .meta-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
@@ -180,8 +182,9 @@ button{cursor:pointer;font-family:'Outfit',sans-serif}
   </div>
 
   <div class="admin-section">
-    <h3>Manage Claims</h3>
-    <div id="adminClaimList"></div>
+    <h3>Claims Tally</h3>
+    <div id="adminClaimTally"></div>
+    <div id="adminClaimList" style="margin-top:12px"></div>
     <button class="admin-unclaim-btn" onclick="clearAllClaims()">Clear All Claims</button>
   </div>
 </div>
@@ -259,6 +262,9 @@ const CATS_ALL = [...new Set(DEFAULT_ITEMS.map(i=>i.cat))];
 function initItems() {
   const saved = localStorage.getItem("op-reg-overrides");
   if (saved) { try { editOverrides = JSON.parse(saved); } catch(e){} }
+  // Load image overrides
+  const imgSaved = localStorage.getItem("op-reg-img-overrides");
+  if (imgSaved) { try { const io = JSON.parse(imgSaved); Object.assign(IMAGES, io); } catch(e){} }
   if (CUSTOM_ORDER.length > 0) {
     ITEMS = CUSTOM_ORDER.map(id => DEFAULT_ITEMS.find(i=>i.id===id)).filter(Boolean);
     const remaining = DEFAULT_ITEMS.filter(i => !CUSTOM_ORDER.includes(i.id));
@@ -309,7 +315,10 @@ function showConfetti() {
 function handleClaim(itemId) {
   const input = document.getElementById("claim-input-" + itemId);
   const name = input ? input.value.trim() : "";
-  if (!name) return;
+  if (!name) {
+    if (input) { input.style.borderColor = "#c44"; input.placeholder = "Please enter your name"; input.focus(); }
+    return;
+  }
   claims[itemId] = { name, date: new Date().toISOString() };
   claimingId = null;
   saveClaims();
@@ -397,7 +406,8 @@ function openEdit(itemId) {
     <div class="edit-field"><label>Name</label><input id="ed-name" value="${item.name.replace(/"/g,'&quot;')}"></div>
     <div class="edit-field"><label>Description</label><textarea id="ed-desc">${item.desc}</textarea></div>
     <div class="edit-field"><label>Options / We'd Love</label><input id="ed-opts" value="${item.opts.replace(/"/g,'&quot;')}"></div>
-    <div class="edit-field"><label>Price Range</label><input id="ed-price" value="${item.price.replace(/"/g,'&quot;')}"></div>
+    <div class="edit-field"><label>Price</label><input id="ed-price" value="${item.price.replace(/"/g,'&quot;')}"></div>
+    <div class="edit-field"><label>Photo (paste image URL or base64 data:image/...)</label><input id="ed-img" value="" placeholder="Leave blank to keep current photo"><p style="font-size:10px;color:#aaa;margin-top:4px">Tip: Upload an image to imgur.com or postimages.org and paste the direct image URL</p></div>
     <div class="edit-field"><label>Category</label><input id="ed-cat" value="${item.cat}"></div>
     <div class="edit-btns">
       <button class="edit-save" onclick="saveEdit('${itemId}')">Save</button>
@@ -419,6 +429,13 @@ function saveEdit(itemId) {
     price: document.getElementById("ed-price").value,
     cat: document.getElementById("ed-cat").value,
   };
+  const newImg = document.getElementById("ed-img").value.trim();
+  if (newImg) {
+    const imgOverrides = JSON.parse(localStorage.getItem("op-reg-img-overrides") || "{}");
+    imgOverrides[itemId] = newImg;
+    localStorage.setItem("op-reg-img-overrides", JSON.stringify(imgOverrides));
+    IMAGES[itemId] = newImg;
+  }
   editOverrides[itemId] = override;
   localStorage.setItem("op-reg-overrides", JSON.stringify(editOverrides));
   const idx = ITEMS.findIndex(i => i.id === itemId);
@@ -449,6 +466,7 @@ function resetOrder() {
   if (!confirm("Reset item order to default?")) return;
   localStorage.removeItem("op-reg-order");
   localStorage.removeItem("op-reg-overrides");
+  localStorage.removeItem("op-reg-img-overrides");
   editOverrides = {};
   ITEMS = [...DEFAULT_ITEMS];
   renderAdminList();
@@ -500,11 +518,43 @@ function renderAdminList() {
     </div>`;
   }).join("");
 
-  // Claims list
-  const cl = document.getElementById("adminClaimList");
+  // Claims tally - group by person
+  const tally = document.getElementById("adminClaimTally");
   const claimedItems = ITEMS.filter(i => claims[i.id]);
+  const byPerson = {};
+  claimedItems.forEach(item => {
+    const c = claims[item.id];
+    if (!byPerson[c.name]) byPerson[c.name] = [];
+    byPerson[c.name].push(item);
+  });
+  const personNames = Object.keys(byPerson).sort();
+  if (personNames.length === 0) {
+    tally.innerHTML = '<p style="font-size:13px;color:#aaa;padding:8px 0">No claims yet</p>';
+  } else {
+    tally.innerHTML = `
+      <div style="background:#F8F6F0;border-radius:10px;padding:14px;border:1px solid #EDE8DF">
+        <div style="display:flex;justify-content:space-between;margin-bottom:10px">
+          <span style="font-size:12px;font-weight:600;color:#2C3315">${claimedItems.length} of ${ITEMS.length} gifts claimed</span>
+          <span style="font-size:12px;color:#999">${personNames.length} guest${personNames.length!==1?"s":""}</span>
+        </div>
+        ${personNames.map(name => {
+          const items = byPerson[name];
+          return `<div style="margin-bottom:8px;padding:8px 10px;background:#fff;border-radius:6px;border:1px solid #EDE8DF">
+            <div style="font-size:13px;font-weight:500;color:#2C3315;margin-bottom:4px">${name} <span style="font-size:10px;color:#999;font-weight:400">(${items.length} item${items.length!==1?"s":""})</span></div>
+            ${items.map(item => `<div style="font-size:11px;color:#777;padding:2px 0;display:flex;justify-content:space-between;align-items:center">
+              <span>• ${item.name} <span style="color:#bbb">${item.price}</span></span>
+              <button onclick="removeClaim('${item.id}')" style="background:none;border:none;font-size:10px;color:#c44;cursor:pointer;padding:2px 4px">✕</button>
+            </div>`).join("")}
+          </div>`;
+        }).join("")}
+      </div>
+    `;
+  }
+
+  // Individual claims list
+  const cl = document.getElementById("adminClaimList");
   if (claimedItems.length === 0) {
-    cl.innerHTML = '<p style="font-size:13px;color:#aaa;padding:8px 0">No claims yet</p>';
+    cl.innerHTML = '';
   } else {
     cl.innerHTML = claimedItems.map(item => {
       const c = claims[item.id];
@@ -555,13 +605,13 @@ function render() {
       return `
       <div class="card ${claimed?"done":""}" style="animation-delay:${idx*0.04}s">
         ${item.group?'<div class="badge">✨ Group Gift Idea</div>':""}
-        <div class="card-img-wrap"><img class="card-img" src="${IMAGES[item.id]}" alt="${item.name}"></div>
+        <a href="${item.links[0]?.u || '#'}" target="_blank" rel="noopener noreferrer" style="display:block"><div class="card-img-wrap"><img class="card-img" src="${IMAGES[item.id]}" alt="${item.name}"></div></a>
         <div class="card-cat">${item.cat}</div>
-        <h3 class="card-name">${item.name}</h3>
+        <h3 class="card-name"><a href="${item.links[0]?.u || '#'}" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none">${item.name}</a></h3>
         <p class="card-desc">${item.desc}</p>
         <div class="meta">
           <div class="meta-row"><span class="meta-k">We'd love</span><span class="meta-v">${item.opts}</span></div>
-          <div class="meta-row"><span class="meta-k">Price range</span><span class="meta-p">${item.price}</span></div>
+          <div class="meta-row"><span class="meta-k">Price</span><span class="meta-p">${item.price}</span></div>
         </div>
         <div class="links-area">
           <button class="links-btn" onclick="toggleLinks('${item.id}')">View product links (${item.links.length}) <span id="arr-${item.id}" class="links-arr">▾</span></button>
@@ -573,7 +623,7 @@ function render() {
           <div class="claimed-box"><span class="claimed-ico">✓</span><span>Claimed by <strong>${claimed.name}</strong></span></div>
         ` : isClaiming ? `
           <div class="claim-form open">
-            <input id="claim-input-${item.id}" class="claim-input" type="text" placeholder="Your name" onkeydown="if(event.key==='Enter')handleClaim('${item.id}')">
+            <input id="claim-input-${item.id}" class="claim-input" type="text" placeholder="Enter your name (required)" required onkeydown="if(event.key==='Enter')handleClaim('${item.id}')" oninput="this.style.borderColor=this.value.trim()?'#5B6E2E':'#c44'">
             <div class="claim-btns">
               <button class="confirm-btn" onclick="handleClaim('${item.id}')">Confirm Claim</button>
               <button class="cancel-btn" onclick="claimingId=null;render()">Cancel</button>
