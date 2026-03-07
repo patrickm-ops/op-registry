@@ -624,6 +624,11 @@ function openEdit(itemId) {
     </div>
     <div class="edit-field"><label>Category</label><input id="ed-cat" value="${item.cat}"></div>
     <div class="edit-field">
+      <label style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="ed-group" ${item.group ? "checked" : ""}> Group Gift Idea (for expensive items)
+      </label>
+    </div>
+    <div class="edit-field">
       <label>Product Links</label>
       <div id="ed-links-list" style="margin-top:6px">${renderEditLinks()}</div>
       <button onclick="addEditLink()" style="margin-top:6px;font-size:12px;padding:6px 12px;background:#F8F6F0;border:1px dashed #5B6E2E;border-radius:6px;color:#5B6E2E;cursor:pointer;font-weight:500">+ Add Link</button>
@@ -716,6 +721,7 @@ function saveEdit(itemId) {
     opts: document.getElementById("ed-opts").value,
     price: document.getElementById("ed-price").value,
     cat: document.getElementById("ed-cat").value,
+    group: document.getElementById("ed-group").checked,
     links: cleanLinks,
   };
 
