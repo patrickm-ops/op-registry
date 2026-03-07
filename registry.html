@@ -282,6 +282,7 @@ function loadSiteText() {
 }
 function saveSiteText() {
   localStorage.setItem("op-reg-site-text", JSON.stringify(siteText));
+  saveConfig();
 }
 function onSiteTextBlur(key, el) {
   const val = el.innerText.trim();
@@ -301,6 +302,7 @@ function onCardTextBlur(itemId, field, el) {
   if (!editOverrides[itemId]) editOverrides[itemId] = {};
   editOverrides[itemId][field] = val;
   localStorage.setItem("op-reg-overrides", JSON.stringify(editOverrides));
+  saveConfig();
   showToast("Saved!");
 }
 const ADMIN_PASS = "ellie14810";
@@ -371,13 +373,130 @@ function initItems() {
   });
 }
 
-function loadClaims() {
-  claims = JSON.parse(localStorage.getItem("op-registry-claims") || "{}");
+const CLOUD_API = "https://api.npoint.io/61204cfaecf0ccbbbc93";
+
+// ── Cloud helpers ──
+async function cloudGet() {
+  try {
+    const res = await fetch(CLOUD_API);
+    if (res.ok) return await res.json();
+  } catch(e) {}
+  return null;
+}
+
+async function cloudSet(data) {
+  try {
+    await fetch(CLOUD_API, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(data)
+    });
+  } catch(e) {}
+}
+
+// ── Load everything from cloud on page load ──
+async function loadFromCloud() {
+  const data = await cloudGet();
+  if (data) {
+    // Load claims
+    claims = data.claims || {};
+    // Load config
+    const cfg = data.config || {};
+    if (cfg.siteText) Object.assign(siteText, cfg.siteText);
+    if (cfg.overrides) editOverrides = cfg.overrides;
+    if (cfg.imgOverrides) Object.assign(IMAGES, cfg.imgOverrides);
+    if (cfg.order && cfg.order.length) {
+      ITEMS = cfg.order.map(id => DEFAULT_ITEMS.find(i=>i.id===id)).filter(Boolean);
+      const remaining = DEFAULT_ITEMS.filter(i => !cfg.order.includes(i.id));
+      ITEMS = [...ITEMS, ...remaining];
+    }
+    if (cfg.deletedItems && cfg.deletedItems.length) {
+      ITEMS = ITEMS.filter(i => !cfg.deletedItems.includes(i.id));
+    }
+    if (cfg.addedItems && cfg.addedItems.length) {
+      cfg.addedItems.forEach(item => {
+        if (!ITEMS.find(i => i.id === item.id)) {
+          ITEMS.push(item);
+          if (item.cat && !CATS_ALL.includes(item.cat)) {
+            CATS_ALL.push(item.cat);
+            CATS_ALL.sort();
+          }
+        }
+      });
+    }
+    if (cfg.linkOverrides) {
+      Object.keys(cfg.linkOverrides).forEach(id => {
+        const idx = ITEMS.findIndex(i => i.id === id);
+        if (idx >= 0) ITEMS[idx].links = cfg.linkOverrides[id];
+      });
+    }
+    // Apply text overrides
+    ITEMS = ITEMS.map(item => {
+      const ov = editOverrides[item.id];
+      return ov ? {...item, ...ov} : item;
+    });
+  }
+  render();
+  // Auto-refresh every 30s
+  setInterval(async () => {
+    const fresh = await cloudGet();
+    if (!fresh) return;
+    const newClaims = fresh.claims || {};
+    if (JSON.stringify(newClaims) !== JSON.stringify(claims)) {
+      claims = newClaims;
+      render();
+      if (isAdmin) renderAdminList();
+    }
+  }, 30000);
+}
+
+// ── Build config object from current state ──
+function buildConfig() {
+  return {
+    order: ITEMS.map(i => i.id),
+    overrides: editOverrides,
+    imgOverrides: JSON.parse(localStorage.getItem("op-reg-img-overrides") || "{}"),
+    linkOverrides: JSON.parse(localStorage.getItem("op-reg-link-overrides") || "{}"),
+    siteText: siteText,
+    addedItems: JSON.parse(localStorage.getItem("op-reg-added-items") || "[]"),
+    deletedItems: JSON.parse(localStorage.getItem("op-reg-deleted-items") || "[]")
+  };
+}
+
+// ── Save claims to cloud (merges with server) ──
+async function saveClaims() {
+  localStorage.setItem("op-registry-claims", JSON.stringify(claims));
+  const data = await cloudGet() || {};
+  const serverClaims = data.claims || {};
+  const merged = {...serverClaims, ...claims};
+  data.claims = merged;
+  await cloudSet(data);
+  claims = merged;
   render();
 }
 
-function saveClaims() {
-  localStorage.setItem("op-registry-claims", JSON.stringify(claims));
+// ── Save config to cloud (admin only) ──
+async function saveConfig() {
+  const data = await cloudGet() || {};
+  data.config = buildConfig();
+  await cloudSet(data);
+}
+
+// ── Remove single claim from cloud ──
+async function removeClaimFromCloud(itemId) {
+  const data = await cloudGet() || {};
+  const serverClaims = data.claims || {};
+  delete serverClaims[itemId];
+  data.claims = serverClaims;
+  await cloudSet(data);
+  claims = serverClaims;
+}
+
+// ── Clear all claims on cloud ──
+async function clearAllClaimsOnCloud() {
+  const data = await cloudGet() || {};
+  data.claims = {};
+  await cloudSet(data);
 }
 
 function showConfetti() {
@@ -621,6 +740,7 @@ function saveEdit(itemId) {
   closeEdit();
   renderAdminList();
   render();
+  saveConfig();
   showToast("Item updated!");
 }
 
@@ -731,6 +851,7 @@ function saveNewItem() {
   closeEdit();
   renderAdminList();
   render();
+  saveConfig();
   showToast("\"" + name + "\" added to registry!");
 }
 
@@ -757,19 +878,22 @@ function deleteItem(itemId) {
 
   // Clean up related data
   delete claims[itemId];
-  saveClaims();
+  localStorage.setItem("op-registry-claims", JSON.stringify(claims));
+  removeClaimFromCloud(itemId);
   delete editOverrides[itemId];
   localStorage.setItem("op-reg-overrides", JSON.stringify(editOverrides));
 
   renderAdminList();
   render();
+  saveConfig();
   showToast(`"${item.name}" removed`);
 }
 
 function saveAdminChanges() {
   localStorage.setItem("op-reg-order", JSON.stringify(ITEMS.map(i=>i.id)));
   localStorage.setItem("op-reg-overrides", JSON.stringify(editOverrides));
-  showToast("Changes saved locally!");
+  saveConfig();
+  showToast("Changes saved & synced!");
 }
 
 function exportConfig() {
@@ -796,12 +920,14 @@ function resetOrder() {
   ITEMS = [...DEFAULT_ITEMS];
   renderAdminList();
   render();
+  saveConfig();
   showToast("Order reset to default");
 }
 
 function removeClaim(itemId) {
   delete claims[itemId];
-  saveClaims();
+  localStorage.setItem("op-registry-claims", JSON.stringify(claims));
+  removeClaimFromCloud(itemId);
   renderAdminList();
   render();
   showToast("Claim removed");
@@ -810,7 +936,8 @@ function removeClaim(itemId) {
 function clearAllClaims() {
   if (!confirm("Remove ALL guest claims? This cannot be undone.")) return;
   claims = {};
-  saveClaims();
+  localStorage.setItem("op-registry-claims", JSON.stringify(claims));
+  clearAllClaimsOnCloud();
   renderAdminList();
   render();
   showToast("All claims cleared");
@@ -985,7 +1112,7 @@ function render() {
 initItems();
 loadSiteText();
 checkAdmin();
-loadClaims();
+loadFromCloud();
 </script>
 </body>
 </html>
